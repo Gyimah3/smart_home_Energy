@@ -25,7 +25,10 @@ class SmartHomeTransformer(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
         self.energy_decoder = nn.Linear(d_model, 1)
         self.user_decoder = nn.Linear(d_model, num_users)
-        self.anomaly_decoder = nn.Linear(d_model, 1)
+        self.anomaly_decoder = nn.Sequential(
+            nn.Linear(d_model, 1),
+            nn.Sigmoid()  # Ensure anomaly prediction is between 0 and 1
+        )
 
     def forward(self, src):
         src = self.embedding(src)
@@ -33,5 +36,5 @@ class SmartHomeTransformer(nn.Module):
         output = self.transformer_encoder(src)
         energy_pred = self.energy_decoder(output[:, -1, :])
         user_pred = self.user_decoder(output[:, -1, :])
-        anomaly_pred = torch.sigmoid(self.anomaly_decoder(output[:, -1, :]))
+        anomaly_pred = self.anomaly_decoder(output[:, -1, :])
         return energy_pred, user_pred, anomaly_pred

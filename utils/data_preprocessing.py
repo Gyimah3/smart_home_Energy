@@ -3,8 +3,9 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from scipy.stats import skew
-
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 print("started preprocessing")
+
 
 def sin_transformer(period):
     return lambda x: np.sin(x * (2. * np.pi / period))
@@ -32,39 +33,37 @@ def load_and_preprocess_data(file_path):
         df[f"{feature}_sin"] = sin_transformer(cycle)(df[feature])
         df[f"{feature}_cos"] = cos_transformer(cycle)(df[feature])
     
+    # Identify numerical and categorical columns
+    numerical_cols = ['power_watts', 'energy_kwh', 'room_temp', 'outdoor_temp', 'humidity', 'light_level', 'wifi_signal', 'electricity_price']
+    numerical_cols += [f"{feat}_{func}" for feat in cyclical_features for func in ['sin', 'cos']]
+    categorical_cols = ['device_id', 'device_type', 'location', 'operational_status', 'motion_detected', 'door_status', 'user_id', 'user_presence', 'weather_condition']
+    
     # Normalize numerical features
     scaler = MinMaxScaler()
-    numerical_cols = ['power_watts', 'energy_kwh', 'room_temp', 'outdoor_temp', 'humidity', 'light_level', 'wifi_signal', 'electricity_price']
     df[numerical_cols] = scaler.fit_transform(df[numerical_cols])
+    
+    # Encode categorical features
+    label_encoders = {}
+    for col in categorical_cols:
+        le = LabelEncoder()
+        df[col] = le.fit_transform(df[col].astype(str))
+        label_encoders[col] = le
     
     # Create rolling statistics
     rolling_windows = [60, 1440, 10080]  # 1 hour, 1 day, 1 week (assuming 1-minute intervals)
     for col in ['power_watts', 'energy_kwh']:
         for window in rolling_windows:
             df[f"{col}_rolling_mean_{window}"] = df[col].rolling(window=window).mean()
-            df[f"{col}_rolling_max_{window}"] = df[col].rolling(window=window).max()
-            df[f"{col}_rolling_min_{window}"] = df[col].rolling(window=window).min()
-            df[f"{col}_rolling_sum_{window}"] = df[col].rolling(window=window).sum()
             df[f"{col}_rolling_std_{window}"] = df[col].rolling(window=window).std()
-            df[f"{col}_rolling_skew_{window}"] = df[col].rolling(window=window).apply(skew)
-    
-    # Create location-based statistics
-    for col in numerical_cols:
-        df[f"{col}_location_mean"] = df.groupby(['location'])[col].transform('mean')
-        df[f"{col}_location_std"] = df.groupby(['location'])[col].transform('std')
-        df[f"{col}_location_min"] = df.groupby(['location'])[col].transform('min')
-        df[f"{col}_location_max"] = df.groupby(['location'])[col].transform('max')
-        df[f"{col}_location_skew"] = df.groupby(['location'])[col].transform(skew)
-    
-    # One-hot encode categorical variables
-    categorical_cols = ['device_type', 'location', 'weather_condition', 'operational_status', 'door_status', 'user_presence']
-    df = pd.get_dummies(df, columns=categorical_cols)
     
     # Prepare features and targets
-    features = df.drop(['timestamp', 'user_id', 'energy_kwh', 'anomaly_score'], axis=1)
+    features = df.drop(['timestamp', 'energy_kwh', 'anomaly_score'], axis=1)
     energy_target = df['energy_kwh']
-    user_target = pd.get_dummies(df['user_id'])
+    user_target = df['user_id']
     anomaly_target = df['anomaly_score']
+    
+    # Ensure anomaly_target is between 0 and 1
+    anomaly_target = (anomaly_target - anomaly_target.min()) / (anomaly_target.max() - anomaly_target.min())
     
     return train_test_split(features, energy_target, user_target, anomaly_target, test_size=0.2, random_state=42)
 
@@ -73,12 +72,12 @@ def create_sequences(features, energy_target, user_target, anomaly_target, seq_l
     for i in range(len(features) - seq_length + 1):
         X.append(features.iloc[i:i+seq_length].values)
         y_energy.append(energy_target.iloc[i+seq_length-1])
-        y_user.append(user_target.iloc[i+seq_length-1].values)
+        y_user.append(user_target.iloc[i+seq_length-1])
         y_anomaly.append(anomaly_target.iloc[i+seq_length-1])
     
     return (
         np.array(X, dtype=np.float32),
         np.array(y_energy, dtype=np.float32),
-        np.array(y_user, dtype=np.float32),
+        np.array(y_user, dtype=np.int64),
         np.array(y_anomaly, dtype=np.float32)
     )
