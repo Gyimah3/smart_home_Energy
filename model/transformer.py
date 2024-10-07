@@ -31,7 +31,7 @@ class SmartHomeTransformer(nn.Module):
         src = self.embedding(src)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src)
-        energy_pred = self.energy_decoder(output)
-        user_pred = self.user_decoder(output)
-        anomaly_pred = torch.sigmoid(self.anomaly_decoder(output))  # Use sigmoid for anomaly score
+        energy_pred = self.energy_decoder(output[:, -1, :])
+        user_pred = self.user_decoder(output[:, -1, :])
+        anomaly_pred = torch.sigmoid(self.anomaly_decoder(output[:, -1, :]))
         return energy_pred, user_pred, anomaly_pred
