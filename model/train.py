@@ -2,8 +2,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from .transformer import SmartHomeTransformer
-from utils.data_processing import load_and_preprocess_data, create_sequences
+from model.transformer import SmartHomeTransformer
+from utils.data_preprocessing import load_and_preprocess_data, create_sequences
+
+print("started training")
+
 
 def train_model(data_path, seq_length, batch_size, num_epochs):
     # Load and preprocess data
@@ -30,12 +33,13 @@ def train_model(data_path, seq_length, batch_size, num_epochs):
     # Define loss functions and optimizer
     energy_criterion = nn.MSELoss()
     user_criterion = nn.CrossEntropyLoss()
-    anomaly_criterion = nn.MSELoss()
+    anomaly_criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters())
     
     # Training loop
     for epoch in range(num_epochs):
         model.train()
+        total_loss = 0
         for batch in train_loader:
             X_batch, y_energy_batch, y_user_batch, y_anomaly_batch = batch
             
@@ -46,15 +50,17 @@ def train_model(data_path, seq_length, batch_size, num_epochs):
             user_loss = user_criterion(user_pred[:, -1, :], y_user_batch)
             anomaly_loss = anomaly_criterion(anomaly_pred[:, -1, :], y_anomaly_batch)
             
-            total_loss = energy_loss + user_loss + anomaly_loss
-            total_loss.backward()
+            loss = energy_loss + user_loss + anomaly_loss
+            loss.backward()
             optimizer.step()
+            
+            total_loss += loss.item()
         
-        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {total_loss.item():.4f}")
+        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {total_loss/len(train_loader):.4f}")
     
     return model
 
 if __name__ == "__main__":
     model = train_model("data/smart_home_data.csv", seq_length=60, batch_size=32, num_epochs=10)
     torch.save(model.state_dict(), "model/smart_home_model.pth")
-    
+    print("Model trained and saved successfully!")
