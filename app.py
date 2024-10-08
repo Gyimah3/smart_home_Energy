@@ -109,56 +109,31 @@ if uploaded_file is not None:
             else:
                 # Proceed with preprocessing and prediction
                 try:
-                    X, _, _, _ = load_and_preprocess_data(io.StringIO(file_contents))
-                    st.write(f"Preprocessed data shape: {X.shape}")
+                    X_train, X_test, y_energy_train, y_energy_test, y_user_train, y_user_test, y_anomaly_train, y_anomaly_test = load_and_preprocess_data(io.StringIO(file_contents))
+                    st.write(f"Preprocessed data shape: {X_train.shape}")
                     
-                    X_seq, _, _, _ = create_sequences(X, pd.Series([0]*len(X)), pd.DataFrame([[0]*5]*len(X)), pd.Series([0]*len(X)), seq_length=60)
+                    # Create sequences for prediction
+                    X_seq = X_train[:60].reshape(1, 60, -1)  # Take first 60 timesteps for sequence
                     st.write(f"Sequence data shape: {X_seq.shape}")
                     
-                    # Make predictions
-                    async def make_predictions(input_data):
+                    if model is not None:
+                        # Make predictions
                         with torch.no_grad():
-                            energy_pred, user_pred, anomaly_pred = model(torch.FloatTensor(input_data))
-                        return energy_pred, user_pred, anomaly_pred
-
-                    # Decision engine
-                    async def get_decisions(energy_pred, user_pred, anomaly_pred, device_status, device_type):
-                        thresholds = {
-                            'energy': 0.8,
-                            'anomaly': 0.7,
-                            'user_presence': 0.5,
-                            'standby': 0.1
-                        }
-                        return decision_engine(energy_pred.item(), user_pred.numpy(), anomaly_pred.item(), thresholds, device_status, device_type)
-
-                    # Run predictions and decision engine concurrently
-                    async def process_data(input_data, device_status, device_type):
-                        energy_pred, user_pred, anomaly_pred = await make_predictions(input_data)
-                        decisions = await get_decisions(energy_pred[0, -1], user_pred[0, -1], anomaly_pred[0, -1], device_status, device_type)
-                        return energy_pred[0, -1].item(), user_pred[0, -1].numpy(), anomaly_pred[0, -1].item(), decisions
-
-                    # Run the async functions for each device
-                    results = []
-                    for i in range(len(X_seq)):
-                        device_status = data.iloc[i]['operational_status']
-                        device_type = data.iloc[i]['device_type']
-                        results.append(asyncio.run(process_data(X_seq[i:i+1], device_status, device_type)))
-
-                    # Display results
-                    for i, (energy_pred, user_pred, anomaly_pred, decisions) in enumerate(results):
-                        st.write(f"Device {i+1}:")
-                        st.write(f"Energy Consumption Prediction: {energy_pred:.2f}")
-                        st.write(f"User Identification: {np.argmax(user_pred)}")
-                        st.write(f"Anomaly Score: {anomaly_pred:.2f}")
+                            energy_pred, user_pred, anomaly_pred = model(torch.FloatTensor(X_seq))
                         
-                        st.write("Decisions:")
-                        for decision in decisions:
-                            st.write(f"- {decision}")
-                        st.write("---")
-
+                        # Display predictions
+                        st.write("Predictions:")
+                        st.write(f"Energy Consumption: {energy_pred[0, -1].item():.4f}")
+                        st.write(f"User ID: {torch.argmax(user_pred[0, -1]).item()}")
+                        st.write(f"Anomaly Score: {anomaly_pred[0, -1].item():.4f}")
+                    else:
+                        st.error("Model not loaded properly. Please check the model files.")
+                        
                 except Exception as e:
                     st.error(f"Error during preprocessing or prediction: {str(e)}")
                     st.error("Please check if the data format matches the expected input for the model.")
+                    import traceback
+                    st.sidebar.text(traceback.format_exc()) 
 
     except pd.errors.EmptyDataError:
         st.error("The uploaded file is empty. Please check your file and try again.")
