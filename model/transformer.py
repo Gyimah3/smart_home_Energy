@@ -21,11 +21,9 @@ class SmartHomeTransformer(nn.Module):
     def __init__(self, input_dim, d_model, nhead, num_layers, dim_feedforward, num_users):
         super(SmartHomeTransformer, self).__init__()
         
-        # Input embedding
         self.embedding = nn.Linear(input_dim, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
         
-        # Transformer encoder
         encoder_layers = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
@@ -34,21 +32,18 @@ class SmartHomeTransformer(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
         
-        # Energy prediction (regression)
         self.energy_decoder = nn.Sequential(
             nn.Linear(d_model, 64),
             nn.ReLU(),
             nn.Linear(64, 1)
         )
         
-        # User prediction (classification)
         self.user_decoder = nn.Sequential(
             nn.Linear(d_model, 64),
             nn.ReLU(),
             nn.Linear(64, num_users)
         )
         
-        # Anomaly prediction (binary classification)
         self.anomaly_decoder = nn.Sequential(
             nn.Linear(d_model, 64),
             nn.ReLU(),
@@ -56,29 +51,21 @@ class SmartHomeTransformer(nn.Module):
             nn.Linear(64, 32),
             nn.ReLU(),
             nn.Linear(32, 1),
-            nn.Sigmoid()  # Ensures output is between 0 and 1
+            nn.Sigmoid()
         )
 
     def forward(self, src):
-        # Get the last dimension of src tensor for debugging
-        batch_size, seq_len, feat_dim = src.size()
-        
-        # Input embedding and positional encoding
         src = self.embedding(src)
         src = self.pos_encoder(src)
         
-        # Transformer encoding
         output = self.transformer_encoder(src)
         
-        # Get the last sequence element for predictions
         last_hidden = output[:, -1, :]
         
-        # Make predictions
         energy_pred = self.energy_decoder(last_hidden)
         user_pred = self.user_decoder(last_hidden)
         anomaly_pred = self.anomaly_decoder(last_hidden)
         
-        # Double-check anomaly predictions are in [0, 1]
         anomaly_pred = torch.clamp(anomaly_pred, 0, 1)
         
         return energy_pred, user_pred, anomaly_pred

@@ -15,24 +15,12 @@ from utils.decision_engine import decision_engine
 #     model.load_state_dict(torch.load("model/smart_home_model.pth"))
 #     model.eval()
 #     return model
+import io
 
 # model = load_model()
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import torch
-import asyncio
-import json
-import io
-from model.transformer import SmartHomeTransformer
-from utils.data_preprocessing import load_and_preprocess_data, create_sequences
-from utils.decision_engine import decision_engine
-
-def get_input_dim():
-    """Calculate the input dimension from the data"""
+def get_input_dim(file_path):
     try:
-        X_train, _, _, _, _, _, _, _ = load_and_preprocess_data("data/smart_home_data.csv")
+        X_train, _, _, _, _, _, _, _ = load_and_preprocess_data(file_path)
         input_dim = X_train.shape[1]
         print(f"Calculated input dimension: {input_dim}")
         return input_dim
@@ -41,12 +29,12 @@ def get_input_dim():
         return 100  # fallback default
 
 @st.cache_resource
-def load_model():
+def load_model(input_dim):
     try:
-        # Load model configuration
         with open("model/model_config.json", "r") as f:
             model_config = json.load(f)
         
+        model_config['input_dim'] = input_dim
         print(f"Loading model with config: {model_config}")
         model = SmartHomeTransformer(**model_config)
         
@@ -59,29 +47,22 @@ def load_model():
         st.error("Error loading the pre-trained model. Using untrained model instead.")
         return None
 
-# Streamlit app
 st.title("Smart Home Energy Monitoring System")
 
-# Add debugging information
 st.sidebar.header("Debug Information")
-if st.sidebar.checkbox("Show Debug Info"):
-    input_dim = get_input_dim()
-    st.sidebar.write(f"Input dimension: {input_dim}")
-
-model = load_model()
+show_debug = st.sidebar.checkbox("Show Debug Info")
 
 uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
 
 if uploaded_file is not None:
     try:
-        # Read the first few lines of the file for debugging
         file_contents = uploaded_file.getvalue().decode('utf-8')
-        first_lines = file_contents.split('\n')[:5]
-        st.sidebar.write("First few lines of the file:")
-        for line in first_lines:
-            st.sidebar.text(line)
+        if show_debug:
+            first_lines = file_contents.split('\n')[:5]
+            st.sidebar.write("First few lines of the file:")
+            for line in first_lines:
+                st.sidebar.text(line)
 
-        # Try to read the CSV file
         data = pd.read_csv(io.StringIO(file_contents))
         
         if data.empty:
@@ -94,7 +75,6 @@ if uploaded_file is not None:
             st.write("Columns in the file:")
             st.write(data.columns.tolist())
             
-            # Check if all expected columns are present
             expected_columns = [
                 'timestamp', 'device_id', 'device_type', 'location', 'power_watts', 'energy_kwh',
                 'operational_status', 'room_temp', 'outdoor_temp', 'humidity', 'light_level',
@@ -107,21 +87,23 @@ if uploaded_file is not None:
                 st.error(f"The following expected columns are missing from your file: {', '.join(missing_columns)}")
                 st.error("Please ensure your CSV file contains all necessary columns for prediction.")
             else:
-                # Proceed with preprocessing and prediction
                 try:
                     X_train, X_test, y_energy_train, y_energy_test, y_user_train, y_user_test, y_anomaly_train, y_anomaly_test = load_and_preprocess_data(io.StringIO(file_contents))
                     st.write(f"Preprocessed data shape: {X_train.shape}")
                     
-                    # Create sequences for prediction
-                    X_seq = X_train[:60].reshape(1, 60, -1)  # Take first 60 timesteps for sequence
+                    input_dim = X_train.shape[1]
+                    if show_debug:
+                        st.sidebar.write(f"Input dimension: {input_dim}")
+                    
+                    model = load_model(input_dim)
+                    
+                    X_seq = X_train[:60].reshape(1, 60, -1)
                     st.write(f"Sequence data shape: {X_seq.shape}")
                     
                     if model is not None:
-                        # Make predictions
                         with torch.no_grad():
                             energy_pred, user_pred, anomaly_pred = model(torch.FloatTensor(X_seq))
                         
-                        # Display predictions
                         st.write("Predictions:")
                         st.write(f"Energy Consumption: {energy_pred[0, -1].item():.4f}")
                         st.write(f"User ID: {torch.argmax(user_pred[0, -1]).item()}")
@@ -132,8 +114,9 @@ if uploaded_file is not None:
                 except Exception as e:
                     st.error(f"Error during preprocessing or prediction: {str(e)}")
                     st.error("Please check if the data format matches the expected input for the model.")
-                    import traceback
-                    st.sidebar.text(traceback.format_exc()) 
+                    if show_debug:
+                        import traceback
+                        st.sidebar.text(traceback.format_exc())
 
     except pd.errors.EmptyDataError:
         st.error("The uploaded file is empty. Please check your file and try again.")
