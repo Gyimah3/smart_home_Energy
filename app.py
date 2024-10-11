@@ -1,133 +1,181 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import torch
-import asyncio
+import json
+import io
 from model.transformer import SmartHomeTransformer
 from utils.data_preprocessing import load_and_preprocess_data, create_sequences
 from utils.decision_engine import decision_engine
 
-# # Load the trained model
-# @st.cache_resource
-# def load_model():
-#     input_dim = 100  # Update this based on your actual input dimension after preprocessing
-#     num_users = 5  # Update this based on your actual number of users
-#     model = SmartHomeTransformer(input_dim, d_model=64, nhead=4, num_layers=2, dim_feedforward=256, num_users=num_users)
-#     model.load_state_dict(torch.load("model/smart_home_model.pth"))
-#     model.eval()
-#     return model
-import io
-
-# model = load_model()
-def get_input_dim(file_path):
-    try:
-        X_train, _, _, _, _, _, _, _ = load_and_preprocess_data(file_path)
-        input_dim = X_train.shape[1]
-        print(f"Calculated input dimension: {input_dim}")
-        return input_dim
-    except Exception as e:
-        print(f"Error calculating input dimension: {str(e)}")
-        return 100  # fallback default
-
-@st.cache_resource
-def load_model(input_dim):
+def get_model_config():
+    """Load model configuration from JSON file"""
     try:
         with open("model/model_config.json", "r") as f:
-            model_config = json.load(f)
-        
-        model_config['input_dim'] = input_dim
-        print(f"Loading model with config: {model_config}")
+            return json.load(f)
+    except FileNotFoundError:
+        return {
+            'input_dim': 55,
+            'num_users': 5,
+            'd_model': 64,
+            'nhead': 4,
+            'num_layers': 2,
+            'dim_feedforward': 256
+        }
+
+@st.cache_resource
+def load_model():
+    try:
+        model_config = get_model_config()
         model = SmartHomeTransformer(**model_config)
         
-        checkpoint = torch.load("model/smart_home_model.pth")
-        model.load_state_dict(checkpoint['model_state_dict'])
-        model.eval()
+        try:
+            checkpoint = torch.load("model/smart_home_model.pth")
+            model.load_state_dict(checkpoint['model_state_dict'])
+            model.eval()
+            st.sidebar.success("Model loaded successfully!")
+        except FileNotFoundError:
+            st.warning("No pre-trained model found. Using initialized model.")
+        
         return model
     except Exception as e:
-        print(f"Error loading model: {str(e)}")
-        st.error("Error loading the pre-trained model. Using untrained model instead.")
+        st.error(f"Error loading model: {str(e)}")
         return None
 
-st.title("Smart Home Energy Monitoring System")
+def get_thresholds():
+    """Define thresholds for decision engine"""
+    return {
+        'energy': 0.8,
+        'anomaly': 0.7,
+        'user_presence': 0.5,
+        'standby': 0.1
+    }
 
-st.sidebar.header("Debug Information")
-show_debug = st.sidebar.checkbox("Show Debug Info")
-
-uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
-
-if uploaded_file is not None:
+def process_predictions(model, X_seq, device_status='unknown', device_type='unknown'):
+    """Process model predictions and get decisions"""
     try:
-        file_contents = uploaded_file.getvalue().decode('utf-8')
-        if show_debug:
-            first_lines = file_contents.split('\n')[:5]
-            st.sidebar.write("First few lines of the file:")
-            for line in first_lines:
-                st.sidebar.text(line)
-
-        data = pd.read_csv(io.StringIO(file_contents))
-        
-        if data.empty:
-            st.error("The uploaded file is empty. Please check your file and try again.")
-        else:
-            st.write("Data Preview:")
-            st.write(data.head())
-            st.write(f"Number of rows: {len(data)}")
-            st.write(f"Number of columns: {len(data.columns)}")
-            st.write("Columns in the file:")
-            st.write(data.columns.tolist())
+        with torch.no_grad():
+            # Ensure input tensor has correct shape
+            X_tensor = torch.FloatTensor(X_seq)
             
-            expected_columns = [
-                'timestamp', 'device_id', 'device_type', 'location', 'power_watts', 'energy_kwh',
-                'operational_status', 'room_temp', 'outdoor_temp', 'humidity', 'light_level',
-                'motion_detected', 'door_status', 'user_id', 'user_presence', 'wifi_signal',
-                'weather_condition', 'electricity_price', 'anomaly_score'
-            ]
-            missing_columns = [col for col in expected_columns if col not in data.columns]
+            # Get model predictions
+            energy_pred, user_pred, anomaly_pred = model(X_tensor)
             
-            if missing_columns:
-                st.error(f"The following expected columns are missing from your file: {', '.join(missing_columns)}")
-                st.error("Please ensure your CSV file contains all necessary columns for prediction.")
-            else:
-                try:
-                    X_train, X_test, y_energy_train, y_energy_test, y_user_train, y_user_test, y_anomaly_train, y_anomaly_test = load_and_preprocess_data(io.StringIO(file_contents))
-                    st.write(f"Preprocessed data shape: {X_train.shape}")
-                    
-                    input_dim = X_train.shape[1]
-                    if show_debug:
-                        st.sidebar.write(f"Input dimension: {input_dim}")
-                    
-                    model = load_model(input_dim)
-                    
-                    X_seq = X_train[:60].reshape(1, 60, -1)
-                    st.write(f"Sequence data shape: {X_seq.shape}")
-                    
-                    if model is not None:
-                        with torch.no_grad():
-                            energy_pred, user_pred, anomaly_pred = model(torch.FloatTensor(X_seq))
-                        
-                        st.write("Predictions:")
-                        st.write(f"Energy Consumption: {energy_pred[0, -1].item():.4f}")
-                        st.write(f"User ID: {torch.argmax(user_pred[0, -1]).item()}")
-                        st.write(f"Anomaly Score: {anomaly_pred[0, -1].item():.4f}")
-                    else:
-                        st.error("Model not loaded properly. Please check the model files.")
-                        
-                except Exception as e:
-                    st.error(f"Error during preprocessing or prediction: {str(e)}")
-                    st.error("Please check if the data format matches the expected input for the model.")
-                    if show_debug:
-                        import traceback
-                        st.sidebar.text(traceback.format_exc())
-
-    except pd.errors.EmptyDataError:
-        st.error("The uploaded file is empty. Please check your file and try again.")
-    except pd.errors.ParserError as e:
-        st.error(f"Error parsing the CSV file: {str(e)}. Please ensure your file is a valid CSV.")
+            # Extract last timestep predictions
+            energy_val = energy_pred[0].item()
+            user_logits = user_pred[0]
+            user_id = torch.argmax(user_logits).item()
+            anomaly_val = anomaly_pred[0].item()
+            
+            # Get decisions from decision engine
+            thresholds = get_thresholds()
+            decisions = decision_engine(
+                energy_val,
+                user_logits.numpy(),
+                anomaly_val,
+                thresholds,
+                device_status,
+                device_type
+            )
+            
+            return {
+                'energy_pred': energy_val,
+                'user_id': user_id,
+                'anomaly_score': anomaly_val,
+                'decisions': decisions
+            }
+            
     except Exception as e:
-        st.error(f"An unexpected error occurred: {str(e)}")
-        st.error("Please check the file format and contents in the sidebar for more information.")
+        st.error(f"Prediction error: {str(e)}")
+        return None
 
+def process_data(data):
+    """Process input data and create sequences"""
+    try:
+        # Preprocess the data
+        X_train, X_test, y_energy_train, y_energy_test, y_user_train, y_user_test, y_anomaly_train, y_anomaly_test = load_and_preprocess_data(io.StringIO(data))
+        
+        # Create sequence for prediction
+        if len(X_train) >= 60:
+            X_seq = X_train[:60].reshape(1, 60, -1)
+        else:
+            # Pad sequences shorter than 60 timesteps
+            padding = np.zeros((60 - len(X_train), X_train.shape[1]))
+            padded_data = np.vstack([X_train, padding])
+            X_seq = padded_data.reshape(1, 60, -1)
+        
+        return X_seq, X_train.shape
+    except Exception as e:
+        st.error(f"Data processing error: {str(e)}")
+        return None, None
 
+def display_predictions(predictions):
+    """Display model predictions and decisions"""
+    st.write("### Predictions")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Energy Consumption", f"{predictions['energy_pred']:.4f}")
+    with col2:
+        st.metric("User ID", str(predictions['user_id']))
+    with col3:
+        st.metric("Anomaly Score", f"{predictions['anomaly_score']:.4f}")
+    
+    st.write("### Recommended Actions")
+    for decision in predictions['decisions']:
+        st.info(decision)
 
+def main():
+    st.title("Smart Home Energy Monitoring System")
+    
+    # Debug information in sidebar
+    st.sidebar.title("Debug Information")
+    
+    # Load model
+    model = load_model()
+    
+    # File uploader
+    uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
+    
+    if uploaded_file is not None:
+        try:
+            # Read file contents
+            file_contents = uploaded_file.getvalue().decode('utf-8')
+            data = pd.read_csv(io.StringIO(file_contents))
+            
+            if data.empty:
+                st.error("The uploaded file is empty.")
+                return
+            
+            # Display data preview
+            with st.expander("Data Preview"):
+                st.write(data.head())
+                st.write(f"Number of rows: {len(data)}")
+                st.write(f"Number of columns: {len(data.columns)}")
+            
+            # Process data
+            X_seq, data_shape = process_data(file_contents)
+            
+            if X_seq is not None and model is not None:
+                st.sidebar.write(f"Preprocessed data shape: {data_shape}")
+                st.sidebar.write(f"Sequence data shape: {X_seq.shape}")
+                
+                # Get device information from data if available
+                device_status = data['operational_status'].iloc[-1] if 'operational_status' in data.columns else 'unknown'
+                device_type = data['device_type'].iloc[-1] if 'device_type' in data.columns else 'unknown'
+                
+                # Make predictions and get decisions
+                predictions = process_predictions(model, X_seq, device_status, device_type)
+                
+                if predictions:
+                    display_predictions(predictions)
+                    
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+            st.sidebar.error(f"Detailed error: {str(e)}")
+
+if __name__ == "__main__":
+    main()
 # def get_input_dim():
 #     """Calculate the input dimension from the data"""
 #     try:

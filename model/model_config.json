@@ -1,1 +1,8 @@
-{"input_dim": 55, "num_users": 5, "d_model": 64, "nhead": 4, "num_layers": 2, "dim_feedforward": 256}
+{
+    "input_dim": 55,
+    "num_users": 5,
+    "d_model": 64,
+    "nhead": 4,
+    "num_layers": 2,
+    "dim_feedforward": 256
+}
