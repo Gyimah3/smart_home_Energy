@@ -4,10 +4,13 @@ import numpy as np
 import torch
 import json
 import io
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 from model.transformer import SmartHomeTransformer
 from utils.data_preprocessing import load_and_preprocess_data, create_sequences
 from utils.decision_engine import decision_engine
 
+# ... (keep the existing helper functions like get_model_config, load_model, get_thresholds)
 def get_model_config():
     """Load model configuration from JSON file"""
     try:
@@ -50,24 +53,22 @@ def get_thresholds():
         'user_presence': 0.5,
         'standby': 0.1
     }
-
-def process_predictions(model, X_seq, device_status='unknown', device_type='unknown'):
+def process_predictions(model, X_seq, historical_data, device_status='unknown', device_type='unknown'):
     """Process model predictions and get decisions"""
     try:
         with torch.no_grad():
-            # Ensure input tensor has correct shape
             X_tensor = torch.FloatTensor(X_seq)
-            
-            # Get model predictions
             energy_pred, user_pred, anomaly_pred = model(X_tensor)
             
-            # Extract last timestep predictions
             energy_val = energy_pred[0].item()
             user_logits = user_pred[0]
             user_id = torch.argmax(user_logits).item()
             anomaly_val = anomaly_pred[0].item()
             
-            # Get decisions from decision engine
+            # Get historical averages
+            historical_energy = historical_data['energy_kwh'].mean()
+            historical_anomaly = historical_data['anomaly_score'].mean()
+            
             thresholds = get_thresholds()
             decisions = decision_engine(
                 energy_val,
@@ -80,14 +81,17 @@ def process_predictions(model, X_seq, device_status='unknown', device_type='unkn
             
             return {
                 'energy_pred': energy_val,
+                'historical_energy': historical_energy,
                 'user_id': user_id,
                 'anomaly_score': anomaly_val,
+                'historical_anomaly': historical_anomaly,
                 'decisions': decisions
             }
             
     except Exception as e:
         st.error(f"Prediction error: {str(e)}")
         return None
+
 
 def process_data(data):
     """Process input data and create sequences"""
@@ -109,37 +113,82 @@ def process_data(data):
         st.error(f"Data processing error: {str(e)}")
         return None, None
 
-def display_predictions(predictions):
+
+def display_predictions(predictions, historical_data, device_type):
     """Display model predictions and decisions"""
     st.write("### Predictions")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric("Energy Consumption", f"{predictions['energy_pred']:.4f}")
+        energy_change = (predictions['energy_pred'] - predictions['historical_energy']) / predictions['historical_energy'] * 100
+        st.metric("Energy Consumption", f"{predictions['energy_pred']:.4f} kWh", f"{energy_change:.1f}%")
+    
     with col2:
-        st.metric("User ID", str(predictions['user_id']))
+        user_profile = get_user_profile(predictions['user_id'])
+        st.metric("User", user_profile['name'], f"Confidence: {user_profile['confidence']:.1f}%")
+    
     with col3:
-        st.metric("Anomaly Score", f"{predictions['anomaly_score']:.4f}")
+        anomaly_change = (predictions['anomaly_score'] - predictions['historical_anomaly']) / predictions['historical_anomaly'] * 100
+        st.metric("Anomaly Score", f"{predictions['anomaly_score']:.4f}", f"{anomaly_change:.1f}%")
+    
+    st.write("### Device Status")
+    last_on_time, last_off_time = get_last_status_change(historical_data)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"Last turned ON: {last_on_time}")
+    with col2:
+        st.write(f"Last turned OFF: {last_off_time}")
     
     st.write("### Recommended Actions")
     for decision in predictions['decisions']:
         st.info(decision)
+    
+    st.write("### Energy Consumption Over Time")
+    plot_energy_consumption(historical_data)
+
+def get_user_profile(user_id):
+    """Get user profile information"""
+    # In a real app, this would fetch from a database
+    users = {
+        0: {"name": "Unknown", "confidence": 0},
+        1: {"name": "Alice", "confidence": 95.5},
+        2: {"name": "Bob", "confidence": 97.2},
+        3: {"name": "Charlie", "confidence": 99.8},
+        4: {"name": "Diana", "confidence": 98.6}
+    }
+    return users.get(user_id, {"name": f"User {user_id}", "confidence": 0})
+
+def get_last_status_change(historical_data):
+    """Get the last time the device was turned on and off"""
+    on_times = historical_data[historical_data['operational_status'] == 1]['timestamp']
+    off_times = historical_data[historical_data['operational_status'] == 0]['timestamp']
+    
+    last_on = on_times.max() if not on_times.empty else "Unknown"
+    last_off = off_times.max() if not off_times.empty else "Unknown"
+    
+    return last_on, last_off
+
+def plot_energy_consumption(historical_data):
+    """Plot energy consumption over time"""
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(historical_data['timestamp'], historical_data['energy_kwh'])
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Energy Consumption (kWh)')
+    ax.set_title('Energy Consumption Over Time')
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
 
 def main():
     st.title("Smart Home Energy Monitoring System")
     
-    # Debug information in sidebar
     st.sidebar.title("Debug Information")
     
-    # Load model
     model = load_model()
     
-    # File uploader
     uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
     
     if uploaded_file is not None:
         try:
-            # Read file contents
             file_contents = uploaded_file.getvalue().decode('utf-8')
             data = pd.read_csv(io.StringIO(file_contents))
             
@@ -147,28 +196,24 @@ def main():
                 st.error("The uploaded file is empty.")
                 return
             
-            # Display data preview
             with st.expander("Data Preview"):
                 st.write(data.head())
                 st.write(f"Number of rows: {len(data)}")
                 st.write(f"Number of columns: {len(data.columns)}")
             
-            # Process data
             X_seq, data_shape = process_data(file_contents)
             
             if X_seq is not None and model is not None:
                 st.sidebar.write(f"Preprocessed data shape: {data_shape}")
                 st.sidebar.write(f"Sequence data shape: {X_seq.shape}")
                 
-                # Get device information from data if available
                 device_status = data['operational_status'].iloc[-1] if 'operational_status' in data.columns else 'unknown'
                 device_type = data['device_type'].iloc[-1] if 'device_type' in data.columns else 'unknown'
                 
-                # Make predictions and get decisions
-                predictions = process_predictions(model, X_seq, device_status, device_type)
+                predictions = process_predictions(model, X_seq, data, device_status, device_type)
                 
                 if predictions:
-                    display_predictions(predictions)
+                    display_predictions(predictions, data, device_type)
                     
         except Exception as e:
             st.error(f"Error: {str(e)}")
@@ -176,6 +221,185 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# import streamlit as st
+# import pandas as pd
+# import numpy as np
+# import torch
+# import json
+# import io
+# from model.transformer import SmartHomeTransformer
+# from utils.data_preprocessing import load_and_preprocess_data, create_sequences
+# from utils.decision_engine import decision_engine
+
+# def get_model_config():
+#     """Load model configuration from JSON file"""
+#     try:
+#         with open("model/model_config.json", "r") as f:
+#             return json.load(f)
+#     except FileNotFoundError:
+#         return {
+#             'input_dim': 55,
+#             'num_users': 5,
+#             'd_model': 64,
+#             'nhead': 4,
+#             'num_layers': 2,
+#             'dim_feedforward': 256
+#         }
+
+# @st.cache_resource
+# def load_model():
+#     try:
+#         model_config = get_model_config()
+#         model = SmartHomeTransformer(**model_config)
+        
+#         try:
+#             checkpoint = torch.load("model/smart_home_model.pth")
+#             model.load_state_dict(checkpoint['model_state_dict'])
+#             model.eval()
+#             st.sidebar.success("Model loaded successfully!")
+#         except FileNotFoundError:
+#             st.warning("No pre-trained model found. Using initialized model.")
+        
+#         return model
+#     except Exception as e:
+#         st.error(f"Error loading model: {str(e)}")
+#         return None
+
+# def get_thresholds():
+#     """Define thresholds for decision engine"""
+#     return {
+#         'energy': 0.8,
+#         'anomaly': 0.7,
+#         'user_presence': 0.5,
+#         'standby': 0.1
+#     }
+
+# def process_predictions(model, X_seq, device_status='unknown', device_type='unknown'):
+#     """Process model predictions and get decisions"""
+#     try:
+#         with torch.no_grad():
+#             # Ensure input tensor has correct shape
+#             X_tensor = torch.FloatTensor(X_seq)
+            
+#             # Get model predictions
+#             energy_pred, user_pred, anomaly_pred = model(X_tensor)
+            
+#             # Extract last timestep predictions
+#             energy_val = energy_pred[0].item()
+#             user_logits = user_pred[0]
+#             user_id = torch.argmax(user_logits).item()
+#             anomaly_val = anomaly_pred[0].item()
+            
+#             # Get decisions from decision engine
+#             thresholds = get_thresholds()
+#             decisions = decision_engine(
+#                 energy_val,
+#                 user_logits.numpy(),
+#                 anomaly_val,
+#                 thresholds,
+#                 device_status,
+#                 device_type
+#             )
+            
+#             return {
+#                 'energy_pred': energy_val,
+#                 'user_id': user_id,
+#                 'anomaly_score': anomaly_val,
+#                 'decisions': decisions
+#             }
+            
+#     except Exception as e:
+#         st.error(f"Prediction error: {str(e)}")
+#         return None
+
+# def process_data(data):
+#     """Process input data and create sequences"""
+#     try:
+#         # Preprocess the data
+#         X_train, X_test, y_energy_train, y_energy_test, y_user_train, y_user_test, y_anomaly_train, y_anomaly_test = load_and_preprocess_data(io.StringIO(data))
+        
+#         # Create sequence for prediction
+#         if len(X_train) >= 60:
+#             X_seq = X_train[:60].reshape(1, 60, -1)
+#         else:
+#             # Pad sequences shorter than 60 timesteps
+#             padding = np.zeros((60 - len(X_train), X_train.shape[1]))
+#             padded_data = np.vstack([X_train, padding])
+#             X_seq = padded_data.reshape(1, 60, -1)
+        
+#         return X_seq, X_train.shape
+#     except Exception as e:
+#         st.error(f"Data processing error: {str(e)}")
+#         return None, None
+
+# def display_predictions(predictions):
+#     """Display model predictions and decisions"""
+#     st.write("### Predictions")
+#     col1, col2, col3 = st.columns(3)
+    
+#     with col1:
+#         st.metric("Energy Consumption", f"{predictions['energy_pred']:.4f}")
+#     with col2:
+#         st.metric("User ID", str(predictions['user_id']))
+#     with col3:
+#         st.metric("Anomaly Score", f"{predictions['anomaly_score']:.4f}")
+    
+#     st.write("### Recommended Actions")
+#     for decision in predictions['decisions']:
+#         st.info(decision)
+
+# def main():
+#     st.title("Smart Home Energy Monitoring System")
+    
+#     # Debug information in sidebar
+#     st.sidebar.title("Debug Information")
+    
+#     # Load model
+#     model = load_model()
+    
+#     # File uploader
+#     uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
+    
+#     if uploaded_file is not None:
+#         try:
+#             # Read file contents
+#             file_contents = uploaded_file.getvalue().decode('utf-8')
+#             data = pd.read_csv(io.StringIO(file_contents))
+            
+#             if data.empty:
+#                 st.error("The uploaded file is empty.")
+#                 return
+            
+#             # Display data preview
+#             with st.expander("Data Preview"):
+#                 st.write(data.head())
+#                 st.write(f"Number of rows: {len(data)}")
+#                 st.write(f"Number of columns: {len(data.columns)}")
+            
+#             # Process data
+#             X_seq, data_shape = process_data(file_contents)
+            
+#             if X_seq is not None and model is not None:
+#                 st.sidebar.write(f"Preprocessed data shape: {data_shape}")
+#                 st.sidebar.write(f"Sequence data shape: {X_seq.shape}")
+                
+#                 # Get device information from data if available
+#                 device_status = data['operational_status'].iloc[-1] if 'operational_status' in data.columns else 'unknown'
+#                 device_type = data['device_type'].iloc[-1] if 'device_type' in data.columns else 'unknown'
+                
+#                 # Make predictions and get decisions
+#                 predictions = process_predictions(model, X_seq, device_status, device_type)
+                
+#                 if predictions:
+#                     display_predictions(predictions)
+                    
+#         except Exception as e:
+#             st.error(f"Error: {str(e)}")
+#             st.sidebar.error(f"Detailed error: {str(e)}")
+
+# if __name__ == "__main__":
+#     main()
 # def get_input_dim():
 #     """Calculate the input dimension from the data"""
 #     try:

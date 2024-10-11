@@ -9,8 +9,8 @@ def decision_engine(energy_pred, user_pred, anomaly_pred, thresholds, device_sta
         user_pred (np.ndarray): User prediction logits
         anomaly_pred (float): Anomaly prediction score
         thresholds (dict): Dictionary containing threshold values
-        device_status (str): Current device status
-        device_type (str): Type of device
+        device_status (str or int): Current device status
+        device_type (str or int): Type of device
         
     Returns:
         list: List of recommended actions
@@ -41,18 +41,22 @@ def decision_engine(energy_pred, user_pred, anomaly_pred, thresholds, device_sta
         
         # Device-specific rules
         if device_status != 'unknown' and device_type != 'unknown':
+            # Convert device_status and device_type to string if they're not already
+            device_status_str = str(device_status).lower()
+            device_type_str = str(device_type).lower()
+            
             # Lighting optimization
-            if device_type.lower() in ['light', 'lighting'] and device_status.lower() == 'on':
+            if 'light' in device_type_str and device_status_str == 'on':
                 if np.max(user_probs) < thresholds['user_presence']:
                     actions.append(f"💡 Light left on with low user presence probability. Recommend turning off.")
             
             # Standby power optimization
-            if device_type.lower() in ['tv', 'television', 'computer', 'pc'] and device_status.lower() == 'on':
+            if device_type_str in ['tv', 'television', 'computer', 'pc'] and device_status_str == 'on':
                 if energy_pred < thresholds['standby']:
                     actions.append(f"⚡ {device_type} may be in standby mode. Consider turning it off completely.")
             
             # General device recommendations
-            if device_status.lower() == 'on' and energy_pred > 0.9:
+            if device_status_str == 'on' and energy_pred > 0.9:
                 actions.append(f"📊 {device_type} is consuming more energy than usual. Check for inefficiencies.")
                 
         # Add general energy-saving recommendations if needed
