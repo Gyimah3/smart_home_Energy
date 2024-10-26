@@ -13,7 +13,6 @@ A real-time smart home energy monitoring system that utilizes transformer archit
 - [Data Collection](#data-collection)
 - [Model Architecture](#model-architecture)
 - [Usage](#usage)
-- [API Reference](#api-reference)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -64,7 +63,7 @@ Stream Processing → Time Series DB → Batch Processing → Model Training
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/smart-home-energy-monitoring.git
+git clone https://github.com/gyimah3/smart_home_energy.git
 cd smart_home_energy
 ```
 
@@ -82,8 +81,8 @@ pip install -r requirements.txt
 
 ## Data Collection
 
-### Required Sensors(For hardwarre part)
-- Smart plugs with energy monitoring capabilities
+### Required Sensors(For hardware part)
+- Smart plugs with energy monitoring capabilities(sockets)
 - Motion sensors
 - Temperature sensors
 - Light sensors
